@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every job runs in an Arch Linux container. Arch ships recent GCC, Clang, Boost
+# (>= 1.84 is required, Ubuntu LTS has older), spdlog and GoogleTest packages,
+# and it matches the reference development environment.
+env:
+  PACKAGES: base-devel git cmake ninja boost spdlog gtest lcov clang
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed clang findutils
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: scripts/check.sh format
+
+  gcc:
+    name: GCC (Debug tests + Release -Werror)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed $PACKAGES
+      - uses: actions/checkout@v4
+      - name: Build and test (Debug)
+        run: scripts/check.sh test
+      - name: Release build with warnings as errors
+        run: scripts/check.sh release
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcc-logs
+          path: build/logs/
+
+  clang:
+    name: Clang (Debug -Werror + tests)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed $PACKAGES
+      - uses: actions/checkout@v4
+      - name: Configure, build and test
+        run: cmake --workflow --preset clang
+
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed $PACKAGES
+      - uses: actions/checkout@v4
+      - name: Run clang-tidy
+        run: scripts/check.sh tidy
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tidy-logs
+          path: build/logs/
+
+  coverage:
+    name: Coverage (100% required)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed $PACKAGES
+      - uses: actions/checkout@v4
+      - name: Measure coverage
+        run: scripts/check.sh coverage
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            build/coverage/coverage/
+            build/logs/
+          if-no-files-found: ignore

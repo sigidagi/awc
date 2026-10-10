@@ -17,9 +17,15 @@ scripts/check.sh coverage         # must stay at 100% lines and functions
 scripts/check.sh format [--fix]   # clang-format check / apply
 scripts/check.sh release          # Release + -Werror build and tests
 scripts/check.sh all              # everything above; run before declaring work done
+cmake --workflow --preset clang   # Clang build with -Werror and tests (CI runs this too)
 ```
 
-Build trees live in `build/<preset>` (`dev`, `release`, `coverage`, `tidy`).
+Build trees live in `build/<preset>` (`dev`, `release`, `clang`, `coverage`, `tidy`).
+
+CI (`.github/workflows/ci.yml`) runs format, GCC test + release, the Clang workflow,
+tidy and coverage in `archlinux:latest` containers. Everything CI runs can be reproduced
+locally with the commands above. The local `clang-format` on PATH may be an older
+version than CI's, but both currently produce identical output.
 The test binary is `build/dev/tests/awc_tests`.
 
 ## Definition of done

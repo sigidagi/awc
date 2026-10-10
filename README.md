@@ -1,5 +1,7 @@
 # async_websocket_client
 
+[![CI](https://github.com/sigidagi/awc/actions/workflows/ci.yml/badge.svg)](https://github.com/sigidagi/awc/actions/workflows/ci.yml)
+
 A non-secure (`ws://`) WebSocket client written with C++20 coroutines on top of
 `boost::asio::io_context` and Boost.Beast.
 
@@ -50,6 +52,7 @@ The quickest path uses the CMake presets (build trees go to `build/<preset>`):
 ```sh
 cmake --workflow --preset dev        # configure + build + test (Debug)
 cmake --workflow --preset ci         # same in Release with -Werror
+cmake --workflow --preset clang      # Debug with Clang and -Werror
 ```
 
 Individual steps:
@@ -66,6 +69,7 @@ cmake --build --preset format-check                          # fails if anything
 |--------|---------|
 | `dev` | Debug build with tests and examples |
 | `release` | Release build, warnings as errors |
+| `clang` | Debug build with Clang, warnings as errors |
 | `coverage` | `--coverage` instrumentation, `coverage` target runs tests + lcov |
 | `tidy` | runs clang-tidy while compiling |
 
@@ -112,6 +116,22 @@ FAIL 67/68 passed, 1 failed, see build/logs/test.log
 ```
 
 Each command exits non-zero on failure, so the script also works in CI.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and on pull requests.
+Each job runs in an `archlinux:latest` container, because Ubuntu LTS ships a
+Boost older than the required 1.84.
+
+| Job | What it runs |
+|-----|--------------|
+| Format | `scripts/check.sh format` |
+| GCC | `scripts/check.sh test`, then `scripts/check.sh release` |
+| Clang | `cmake --workflow --preset clang` |
+| clang-tidy | `scripts/check.sh tidy` |
+| Coverage | `scripts/check.sh coverage`; the HTML report is uploaded as an artifact |
+
+Logs from `build/logs/` are uploaded when a job fails.
 `MAX_LINES=50 scripts/check.sh tidy` raises the cap on listed items (default 25).
 
 ## Usage
@@ -210,5 +230,6 @@ tests/                            GoogleTest suite + in-process test server
 examples/                         echo_server, echo_client, reconnecting_client
 cmake/                            warnings, coverage, clang-tidy, clang-format helpers
 scripts/check.sh                  summarised build / test / tidy / coverage / format checks
-CMakePresets.json                 dev, release, coverage, tidy presets and workflows
+CMakePresets.json                 dev, release, clang, coverage, tidy presets and workflows
+.github/workflows/ci.yml          GitHub Actions CI
 ```
