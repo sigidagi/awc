@@ -23,7 +23,7 @@ namespace awc {
 namespace asio = boost::asio;
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
-using tcp = asio::ip::tcp;
+using asio::ip::tcp;
 
 // ---------------------------------------------------------------------------
 // Free functions

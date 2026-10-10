@@ -1,6 +1,10 @@
 ---
 # clang-tidy configuration. Run with: cmake -DAWC_ENABLE_CLANG_TIDY=ON ..
 #
+# CI uses the newest clang-tidy (Arch Linux), so checks added in new releases show up
+# there first. Disabled style checks: redundant-lambda-parameter-list would push toward
+# C++23-only `[&] -> T {}` lambdas; trailing-comma conflicts with the clang-format style.
+#
 # Known noise: the static analyzer reports core.NullDereference / core.CallAndMessage
 # inside <boost/asio/impl/awaitable.hpp> (Asio's coroutine frame bookkeeping). These
 # are false positives in a system header and not caused by project code.
@@ -25,6 +29,8 @@ Checks: >
   -readability-inconsistent-ifelse-braces,
   -clang-analyzer-optin.core.EnumCastOutOfRange,
   -clang-analyzer-optin.cplusplus.VirtualCall,
+  -readability-redundant-lambda-parameter-list,
+  -readability-trailing-comma,
   -misc-non-private-member-variables-in-classes,
   -misc-use-anonymous-namespace,
   -modernize-use-trailing-return-type,
@@ -63,7 +69,7 @@ CheckOptions:
   - key: readability-identifier-naming.TypeAliasCase
     value: CamelCase
   - key: readability-identifier-naming.TypeAliasIgnoredRegexp
-    value: '^(tcp|value_type|error_type|.*_t)$'
+    value: '^(value_type|error_type|.*_t)$'
   - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
     value: true
   - key: misc-const-correctness.AnalyzeValues

@@ -1,8 +1,10 @@
 ---
 # Examples: a coroutine taking the client by reference is the intended usage pattern
 # (the client outlives io_context::run()), and main() is allowed to throw.
+# misc-const-correctness only flags main()'s `char** argv`, whose signature is fixed.
 InheritParentConfig: true
 Checks: >
   -cppcoreguidelines-avoid-reference-coroutine-parameters,
-  -bugprone-exception-escape
+  -bugprone-exception-escape,
+  -misc-const-correctness
 ...
