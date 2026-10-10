@@ -12,6 +12,7 @@ keeps full logs in `build/logs/`.
 ```sh
 scripts/check.sh build            # dev preset build; errors only on failure
 scripts/check.sh test [FILTER]    # gtest suite, optional --gtest_filter pattern
+scripts/check.sh asan [FILTER]    # the same suite under AddressSanitizer + UBSan
 scripts/check.sh tidy             # clang-tidy (incremental, slow on first run: Beast headers)
 scripts/check.sh coverage         # must stay at 100% lines and functions
 scripts/check.sh format [--fix]   # clang-format check / apply
@@ -20,7 +21,7 @@ scripts/check.sh all              # everything above; run before declaring work 
 cmake --workflow --preset clang   # Clang build with -Werror and tests (CI runs this too)
 ```
 
-Build trees live in `build/<preset>` (`dev`, `release`, `clang`, `coverage`, `tidy`).
+Build trees live in `build/<preset>` (`dev`, `release`, `clang`, `asan`, `coverage`, `tidy`).
 
 CI (`.github/workflows/ci.yml`) runs format, GCC test + release, the Clang workflow,
 tidy and coverage in `archlinux:latest` containers. Everything CI runs can be reproduced
@@ -31,8 +32,8 @@ The test binary is `build/dev/tests/awc_tests`.
 ## Definition of done
 
 - `scripts/check.sh all` passes: formatted, 0 project clang-tidy warnings, all tests
-  green, 100% line and function coverage of `src/` and `include/`, and the Release
-  build with warnings as errors compiles and passes the tests.
+  green (also under ASan + UBSan), 100% line and function coverage of `src/` and
+  `include/`, and the Release build with warnings as errors compiles and passes the tests.
 - New behaviour gets a test in `tests/`; new failure modes get a test that drives them
   through `TestServer`, not a mock.
 
@@ -67,14 +68,22 @@ The test binary is `build/dev/tests/awc_tests`.
   without locks. Never add a second thread calling `io_context::run()` without
   introducing a strand.
 - **Lifetime.** `WebSocketClient` is a thin facade over `shared_ptr<ClientImpl>`.
-  Spawned coroutines capture `shared_from_this()`, and `~WebSocketClient` calls
-  `abort()`, which drops the user callbacks. Keep both properties when adding coroutines.
+  Member coroutines of `ClientImpl` hold only a raw `this`, so nothing may await one
+  without co-owning the implementation: the facade wraps every awaitable it returns in
+  `keep_alive(impl_, ...)`, and spawned coroutines either capture `shared_from_this()`
+  or are wrapped the same way. `~WebSocketClient` calls `abort()`, which drops the user
+  callbacks. Keep all of this when adding coroutines; `scripts/check.sh asan` catches
+  violations that the normal build does not.
 - **One write at a time.** Beast allows a single outstanding write, so `send()`
   serialises through the `write_lock_` channel. Pings go through `async_ping`, which
   Beast already coordinates with writes.
 - **Session teardown.** The read loop and ping loop of a session each report an
   `Error`. The first one reported is the disconnect cause, and teardown closes the
   TCP socket to abort the other loop.
+- **Heartbeat.** The pong deadline starts when a ping is issued, not when its write
+  completes: `send_ping` runs in its own coroutine, because the write can queue behind a
+  send stuck on a full socket buffer. At most one ping write is in flight per session
+  (`PingState::in_flight`); a failed write wakes the ping loop through `ping_timer_`.
 - **Back-pressure.** When the receive queue is full the reader blocks, so pongs are
   not processed. The ping loop skips the pong timeout while `reader_blocked_` is set.
   Do not "fix" this into a false PongTimeout.
@@ -85,6 +94,9 @@ The test binary is `build/dev/tests/awc_tests`.
 - gtest `ASSERT_*` contains a plain `return`, which does not compile inside a
   coroutine. Use `CO_ASSERT_TRUE` / `CO_ASSERT_FALSE` from `test_utils.hpp` in
   coroutine bodies. `EXPECT_*` works everywhere.
+- Tests that destroy the client while an operation is pending only catch lifetime bugs
+  under `scripts/check.sh asan`; the normal build usually reads the freed memory without
+  crashing.
 - Never assert timing with fixed sleeps alone. Poll with `co_await wait_until(...)`.
   Tests must stay stable under `--gtest_repeat=15 --gtest_shuffle`.
 - Each `ClientTest` sets the library log level to `off`. To debug a test, call

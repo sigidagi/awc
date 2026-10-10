@@ -62,6 +62,17 @@
         "CMAKE_CXX_COMPILER": "clang++",
         "AWC_WARNINGS_AS_ERRORS": "ON"
       }
+    },
+    {
+      "name": "asan",
+      "displayName": "Debug build with AddressSanitizer + UndefinedBehaviorSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AWC_BUILD_EXAMPLES": "OFF",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
     }
   ],
   "buildPresets": [
@@ -76,6 +87,10 @@
     {
       "name": "clang",
       "configurePreset": "clang"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
     },
     {
       "name": "tidy",
@@ -136,6 +151,17 @@
         "noTestsAction": "error",
         "jobs": 4
       }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
     }
   ],
   "workflowPresets": [
@@ -187,6 +213,23 @@
         {
           "type": "test",
           "name": "clang"
+        }
+      ]
+    },
+    {
+      "name": "asan",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "asan"
+        },
+        {
+          "type": "build",
+          "name": "asan"
+        },
+        {
+          "type": "test",
+          "name": "asan"
         }
       ]
     }

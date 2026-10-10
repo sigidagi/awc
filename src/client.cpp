@@ -5,6 +5,7 @@
 
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
 #include <boost/asio/experimental/channel.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/steady_timer.hpp>
@@ -80,6 +81,15 @@ public:
 private:
     asio::steady_timer timer_;
 };
+
+/// Awaits `operation` while co-owning `owner`. Member coroutines only hold a raw `this`,
+/// so without this an operation still pending when its owner is released would resume
+/// on freed memory. Coroutine parameters live in the frame until it completes.
+template <class T, class Owner>
+asio::awaitable<T> keep_alive(std::shared_ptr<Owner> owner, asio::awaitable<T> operation) {
+    const auto guard = std::move(owner);
+    co_return co_await std::move(operation);
+}
 
 }  // namespace
 
@@ -234,6 +244,12 @@ public:
     void on_error(WebSocketClient::ErrorHandler handler) { error_handler_ = std::move(handler); }
 
 private:
+    /// Shared by a session's ping loop and the ping writes it spawns.
+    struct PingState {
+        bool in_flight = false;
+        std::optional<Error> error;
+    };
+
     // ---- connection loop ---------------------------------------------------
 
     asio::awaitable<void> run_loop() {
@@ -465,31 +481,38 @@ private:
             co_return cancelled();
         }
 
+        const auto pings = std::make_shared<PingState>();
         std::uint64_t sequence = 0;
         for (;;) {
             ping_timer_.expires_after(config_.ping_interval);
-            co_await ping_timer_.async_wait(use_nothrow);
+            co_await ping_timer_.async_wait(use_nothrow);  // cut short by a failed ping write
             if (session_closing_) {
                 co_return cancelled();
+            }
+            if (pings->error) {
+                co_return *pings->error;
             }
 
             awaiting_pong_ = true;
             ping_sent_at_ = std::chrono::steady_clock::now();
-            const auto payload = "awc-" + std::to_string(++sequence);
-            auto [ping_ec] = co_await stream->async_ping(websocket::ping_data{payload}, use_nothrow);
-            if (ping_ec) {
-                if (session_closing_) {
-                    co_return cancelled();
-                }
-                co_return make_error(ErrorCode::SendFailed, "failed to send ping", ping_ec);
+            // The write runs on its own: it can queue behind a send that is stuck on a full
+            // socket buffer, and the pong deadline below must start counting regardless.
+            // Beast allows one outstanding ping, so a still pending one is not repeated.
+            if (!pings->in_flight) {
+                pings->in_flight = true;
+                asio::co_spawn(executor_,
+                               keep_alive(shared_from_this(),
+                                          send_ping(stream, "awc-" + std::to_string(++sequence), pings)),
+                               asio::detached);
             }
-            ++stats_.pings_sent;
-            logger_->trace("[{}] ping {} sent", config_.url, payload);
 
             ping_timer_.expires_after(config_.pong_timeout);
-            co_await ping_timer_.async_wait(use_nothrow);  // cut short by a pong
+            co_await ping_timer_.async_wait(use_nothrow);  // cut short by a pong or a failed ping write
             if (session_closing_) {
                 co_return cancelled();
+            }
+            if (pings->error) {
+                co_return *pings->error;
             }
             if (awaiting_pong_ && !reader_blocked_) {
                 co_return make_error(
@@ -497,6 +520,22 @@ private:
                     "no pong received within " + std::to_string(config_.pong_timeout.count()) + " ms");
             }
         }
+    }
+
+    asio::awaitable<void> send_ping(std::shared_ptr<Stream> stream, std::string payload,
+                                    std::shared_ptr<PingState> pings) {
+        auto [ec] = co_await stream->async_ping(websocket::ping_data{payload}, use_nothrow);
+        pings->in_flight = false;
+        if (session_closing_ || stream != stream_) {
+            co_return;  // the session ended; its teardown aborted this write
+        }
+        if (ec) {
+            pings->error = make_error(ErrorCode::SendFailed, "failed to send ping", ec);
+            ping_timer_.cancel();  // wake the ping loop
+            co_return;
+        }
+        ++stats_.pings_sent;
+        logger_->trace("[{}] ping {} sent", config_.url, payload);
     }
 
     void on_control_frame(websocket::frame_type kind) {
@@ -579,27 +618,27 @@ WebSocketClient::~WebSocketClient() {
 }
 
 asio::awaitable<Result<void>> WebSocketClient::connect() {
-    return impl_->connect();
+    return detail::keep_alive(impl_, impl_->connect());
 }
 
 asio::awaitable<Result<void>> WebSocketClient::send(Message message) {
-    return impl_->send(std::move(message));
+    return detail::keep_alive(impl_, impl_->send(std::move(message)));
 }
 
 asio::awaitable<Result<void>> WebSocketClient::send_text(std::string text) {
-    return impl_->send(Message::text(std::move(text)));
+    return send(Message::text(std::move(text)));
 }
 
 asio::awaitable<Result<void>> WebSocketClient::send_binary(std::span<const std::byte> data) {
-    return impl_->send(Message::binary(data));
+    return send(Message::binary(data));
 }
 
 asio::awaitable<Result<Message>> WebSocketClient::receive() {
-    return impl_->receive();
+    return detail::keep_alive(impl_, impl_->receive());
 }
 
 asio::awaitable<void> WebSocketClient::close() {
-    return impl_->close();
+    return detail::keep_alive(impl_, impl_->close());
 }
 
 ConnectionState WebSocketClient::state() const noexcept {

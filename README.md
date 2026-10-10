@@ -57,6 +57,7 @@ The quickest path uses the CMake presets (build trees go to `build/<preset>`):
 cmake --workflow --preset dev        # configure + build + test (Debug)
 cmake --workflow --preset ci         # same in Release with -Werror
 cmake --workflow --preset clang      # Debug with Clang and -Werror
+cmake --workflow --preset asan       # Debug with AddressSanitizer + UndefinedBehaviorSanitizer
 ```
 
 Individual steps:
@@ -74,6 +75,7 @@ cmake --build --preset format-check                          # fails if anything
 | `dev` | Debug build with tests and examples |
 | `release` | Release build, warnings as errors |
 | `clang` | Debug build with Clang, warnings as errors |
+| `asan` | Debug build with AddressSanitizer + UndefinedBehaviorSanitizer |
 | `coverage` | `--coverage` instrumentation, `coverage` target runs tests + lcov |
 | `tidy` | runs clang-tidy while compiling |
 
@@ -99,11 +101,12 @@ Full logs are kept in `build/logs/`.
 ```sh
 scripts/check.sh build              # errors only on failure, deduplicated warnings otherwise
 scripts/check.sh test [FILTER]      # pass count, or each failed test with its first assertion
+scripts/check.sh asan [FILTER]      # the tests under ASan + UBSan; names the test and the report
 scripts/check.sh tidy               # project warnings grouped by check (system headers ignored)
 scripts/check.sh coverage           # totals plus every uncovered line with its source
 scripts/check.sh format [--fix]     # files that need formatting, or reformat them
 scripts/check.sh release            # Release build with -Werror, then the tests
-scripts/check.sh all                # format, test, tidy, coverage, release; stops at the first failure
+scripts/check.sh all                # format, test, asan, tidy, coverage, release; stops at the first failure
 ```
 
 Example output:
@@ -186,7 +189,8 @@ Disconnected --connect()--> Connecting --ok--> Connected --lost--> Reconnecting 
   `ConnectionClosed` after `close()` or once the client gave up, after any
   buffered messages have been drained.
 * `close()` sends a close frame, stops reconnecting and returns when everything
-  has shut down. Destroying the client aborts all pending work.
+  has shut down. Destroying the client aborts all pending work; operations that
+  are still being awaited complete with an error.
 * `on_state_change` / `on_error` callbacks are invoked on the `io_context` thread.
 
 ### Errors
@@ -240,49 +244,24 @@ CMakePresets.json                 dev, release, clang, coverage, tidy presets an
 
 ## Known defects
 
-Found during an external review on 2026-10-10. Each one was reproduced with the
-scenarios named below from wsbench, a separate test harness; none is covered by this
-project's own tests.
+Found during an external review on 2026-10-10 with wsbench, a separate test harness.
 
-### Heartbeat misses a dead peer while a send is stuck
+### Fixed
 
-The pong timeout only starts after `async_ping` has completed (`ping_loop` in
-`src/client.cpp`). If the peer stops reading while a large `send()` is in flight, the
-socket buffers fill up and Beast queues the ping behind the stuck write. The ping
-never completes, so the pong timeout never starts and the client stays `Connected`
-indefinitely. In the same situation, `close()` did not complete within 6 s.
+- **Heartbeat missed a dead peer while a send was stuck.** The pong timeout only
+  started once the ping had been written, and a ping queued behind a send stuck on a
+  full socket buffer was never written. The pong deadline now starts when the ping is
+  issued, and the ping write runs in its own coroutine. Test:
+  `ClientTest.PongTimeoutWhileSendIsStuck`.
+- **Use-after-free when the client was destroyed during `connect()` or `close()`.**
+  The facade's awaitables are member coroutines of `ClientImpl` holding a raw `this`;
+  a pending one could resume after the last owner was gone. Every awaitable the
+  facade returns now co-owns the implementation until it completes. Tests:
+  `ClientTest.DestructorWhileConnecting`, `DestructorWhileCloseIsPending` and
+  `DestructorCompletesPendingSendAndReceive`. The use-after-free only shows up
+  reliably under `scripts/check.sh asan`.
 
-- Reproduced by `Heartbeat.DetectsDeadPeerDuringStuckSend`: the peer stops reading,
-  a 64 MiB send starts, and the first ping is due after 500 ms with a 100 ms pong timeout.
-  The client was still connected 3 s later.
-- Suggested fix: start the pong deadline when the ping is issued, not when its write
-  completes. For example, run `async_ping` in its own coroutine and let the ping loop
-  wait for the pong deadline independently.
-- Related, documented limitation: while the receive queue is full (`reader_blocked_`),
-  the pong timeout is skipped, so a dead peer also goes unnoticed while the application
-  is not calling `receive()`.
-
-### Use-after-free when the client is destroyed during `connect()` or `close()`
-
-`WebSocketClient::connect()` and `close()` return member coroutines of
-`detail::ClientImpl` that hold a raw `this`. Nothing keeps the `ClientImpl` alive for
-the awaiting coroutine. When the client is destroyed while either call is pending,
-`abort()` ends the connection loop, the loop's completion handler drops the last
-`shared_ptr`, and the pending call then resumes on freed memory. This contradicts
-"Destroying the client aborts all pending work" above.
-
-- AddressSanitizer reports `heap-use-after-free` at `src/client.cpp:132` (the wait
-  loop in `connect()`) and `src/client.cpp:208` (the wait loop in `close()`).
-- Reproduced by `Shutdown.DestroyWhileConnecting`, `Shutdown.DestroyWhileWaitingToReconnect`,
-  `Shutdown.DestroyWhileCloseIsPending`, `Basics.SendFailsPromptlyWhenNotConnected` and
-  `Reconnect.BackoffDelayGrows`. These all destroy the client while `connect()` or
-  `close()` is still pending. Without sanitizers they pass, because reading the freed
-  memory happens not to crash.
-- Suggested fix: have each facade method keep a `shared_ptr<ClientImpl>` in the
-  coroutine frame until the operation completes, e.g.
-  `[](auto impl) -> awaitable<Result<void>> { co_return co_await impl->connect(); }(impl_)`.
-
-### Packaging
+### Still open: packaging
 
 - **C++23 is not passed on to consumers.** The standard is set with
   `set(CMAKE_CXX_STANDARD 23)`, which only applies to targets in this project. A project

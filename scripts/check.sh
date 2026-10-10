@@ -5,11 +5,12 @@
 # Usage: scripts/check.sh <command> [options]
 #   build              configure + build the dev preset; on failure show only the errors
 #   test [FILTER]      build + run the gtest suite (optional --gtest_filter pattern)
+#   asan [FILTER]      the gtest suite built with AddressSanitizer + UndefinedBehaviorSanitizer
 #   tidy               clang-tidy build (incremental); warnings grouped by check
 #   coverage           coverage build + lcov; totals and every uncovered line
 #   format [--fix]     check formatting (or reformat in place with --fix)
 #   release            Release build with warnings as errors, then the tests
-#   all                format, build, test, tidy, coverage, release (stops at the first failure)
+#   all                format, build, test, asan, tidy, coverage, release (stops at the first failure)
 #
 # Exit status is non-zero when the check fails.
 
@@ -81,12 +82,10 @@ cmd_build() {
     fi
 }
 
-cmd_test() {
-    local filter="${1:-*}"
-    cmd_build || return 1
-    section "test"
-    local log="$LOG_DIR/test.log"
-    ./build/dev/tests/awc_tests --gtest_brief=1 --gtest_color=no --gtest_filter="$filter" >"$log" 2>&1
+# run_gtest <binary> <log> <filter>: runs a gtest binary and summarises the result.
+run_gtest() {
+    local binary="$1" log="$2" filter="$3"
+    "$binary" --gtest_brief=1 --gtest_color=no --gtest_filter="$filter" >"$log" 2>&1
     local status=$?
     local total passed
     total="$(sed -nE 's/^\[==========\] ([0-9]+) tests? from.*ran.*/\1/p' "$log")"
@@ -97,7 +96,13 @@ cmd_test() {
     fi
     if [[ -z "$total" ]]; then
         bad "test binary crashed or did not finish (exit $status), see $log"
-        tail -n 15 "$log" | capped
+        # A sanitizer report names the culprit better than the last lines of output.
+        if grep -qE "^SUMMARY: (Address|UndefinedBehavior)Sanitizer" "$log"; then
+            grep -E "^\[ RUN      \]" "$log" | tail -n 1 | sed 's/^\[ RUN      \] /in test /' | capped
+            grep -E "^SUMMARY: |ERROR: AddressSanitizer|runtime error" "$log" | sed "s|$ROOT/||" | capped
+        else
+            tail -n 15 "$log" | capped
+        fi
         return 1
     fi
     local failed
@@ -124,6 +129,27 @@ cmd_test() {
             n = 0
         }' "$log"
     return 1
+}
+
+cmd_test() {
+    local filter="${1:-*}"
+    cmd_build || return 1
+    section "test"
+    run_gtest ./build/dev/tests/awc_tests "$LOG_DIR/test.log" "$filter"
+}
+
+cmd_asan() {
+    local filter="${1:-*}"
+    section "asan (AddressSanitizer + UndefinedBehaviorSanitizer)"
+    local log="$LOG_DIR/asan-build.log"
+    configure asan "$log" || return 1
+    if ! cmake --build --preset asan >"$log" 2>&1; then
+        bad "asan build, see $log"
+        compiler_diagnostics error "$log" | capped
+        return 1
+    fi
+    ASAN_OPTIONS="detect_leaks=1:halt_on_error=1" UBSAN_OPTIONS="print_stacktrace=1" \
+        run_gtest ./build/asan/tests/awc_tests "$LOG_DIR/asan.log" "$filter"
 }
 
 cmd_tidy() {
@@ -239,16 +265,17 @@ cmd_release() {
 }
 
 cmd_all() {
-    cmd_format && cmd_test && cmd_tidy && cmd_coverage && cmd_release
+    cmd_format && cmd_test && cmd_asan && cmd_tidy && cmd_coverage && cmd_release
 }
 
 usage() {
-    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
     build) cmd_build ;;
     test) cmd_test "${2:-*}" ;;
+    asan) cmd_asan "${2:-*}" ;;
     tidy) cmd_tidy ;;
     coverage) cmd_coverage ;;
     format) cmd_format "${2:-}" ;;

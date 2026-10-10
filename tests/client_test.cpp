@@ -228,6 +228,29 @@ TEST_F(ClientTest, PongTimeoutDropsTheConnection) {
     EXPECT_EQ(client->stats().disconnections, 1U);
 }
 
+TEST_F(ClientTest, PongTimeoutWhileSendIsStuck) {
+    // The peer stops reading while a large send is in flight, so the socket buffers are
+    // full before the first ping is due and the ping write queues behind the stuck send.
+    // The pong deadline must not wait for that write.
+    server.set_behaviour(Behaviour::NeverRead);
+    auto cfg = config();
+    cfg.ping_interval = 1s;  // the buffers must be full by then, also in the slow ASan build
+    cfg.pong_timeout = 100ms;
+    cfg.reconnect.enabled = false;
+    auto client = make_client(cfg);
+    run([&]() -> asio::awaitable<void> {
+        CO_ASSERT_TRUE((co_await client->connect()).has_value());
+        std::optional<Result<void>> send_result;
+        asio::co_spawn(ioc, client->send_text(std::string(std::size_t{64} * 1024 * 1024, 'x')),
+                       [&](const std::exception_ptr&, Result<void> result) { send_result = result; });
+        EXPECT_TRUE(co_await wait_for_state(*client, ConnectionState::Disconnected));
+        EXPECT_TRUE(co_await wait_until([&] { return send_result.has_value(); }));  // aborted by teardown
+    });
+    ASSERT_THAT(errors, SizeIs(1));
+    EXPECT_EQ(errors[0].code, ErrorCode::PongTimeout);
+    EXPECT_EQ(client->stats().pongs_received, 0U);
+}
+
 TEST_F(ClientTest, BackPressureDoesNotCauseFalsePongTimeout) {
     auto cfg = config();
     cfg.ping_interval = 10ms;
@@ -596,15 +619,68 @@ TEST_F(ClientTest, DestructorAbortsEverything) {
     EXPECT_THAT(states, Not(Contains(ConnectionState::Closed)));  // callbacks are detached on destruction
 }
 
+// The destructor tests below leave operations pending on a destroyed client. Their
+// coroutines must still complete safely; a use-after-free here only shows up reliably
+// under `scripts/check.sh asan`.
+
 TEST_F(ClientTest, DestructorWhileConnecting) {
     server.set_behaviour(Behaviour::SilentTcp);
     run([&]() -> asio::awaitable<void> {
+        std::optional<Result<void>> connect_result;
         {
             auto client = make_client(config());
-            asio::co_spawn(ioc, client->connect(), asio::detached);
+            asio::co_spawn(ioc, client->connect(),
+                           [&](const std::exception_ptr&, Result<void> result) { connect_result = result; });
             EXPECT_TRUE(co_await wait_until([&] { return server.sessions_accepted() == 1; }));
         }
         EXPECT_TRUE(co_await wait_until([&] { return server.open_sessions() == 0; }));
+        CO_ASSERT_TRUE(co_await wait_until([&] { return connect_result.has_value(); }));
+        CO_ASSERT_FALSE(connect_result->has_value());
+        EXPECT_EQ(connect_result->error().code, ErrorCode::Cancelled);
+    });
+}
+
+TEST_F(ClientTest, DestructorCompletesPendingSendAndReceive) {
+    server.set_behaviour(Behaviour::NeverRead);
+    run([&]() -> asio::awaitable<void> {
+        std::optional<Result<void>> send_result;
+        std::optional<Result<Message>> receive_result;
+        {
+            auto client = make_client(config());
+            CO_ASSERT_TRUE((co_await client->connect()).has_value());
+            asio::co_spawn(ioc, client->send_text(std::string(std::size_t{64} * 1024 * 1024, 'x')),
+                           [&](const std::exception_ptr&, Result<void> result) { send_result = result; });
+            asio::co_spawn(ioc, client->receive(), [&](const std::exception_ptr&, Result<Message> result) {
+                receive_result = std::move(result);
+            });
+            co_await sleep_for(50ms);
+            EXPECT_FALSE(send_result.has_value());  // blocked on the full socket buffer
+            EXPECT_FALSE(receive_result.has_value());
+        }
+        CO_ASSERT_TRUE(
+            co_await wait_until([&] { return send_result.has_value() && receive_result.has_value(); }));
+        CO_ASSERT_FALSE(send_result->has_value());
+        EXPECT_THAT((std::vector{ErrorCode::ConnectionClosed, ErrorCode::SendFailed}),
+                    Contains(send_result->error().code));
+        CO_ASSERT_FALSE(receive_result->has_value());
+        EXPECT_EQ(receive_result->error().code, ErrorCode::ConnectionClosed);
+    });
+}
+
+TEST_F(ClientTest, DestructorWhileCloseIsPending) {
+    server.set_behaviour(Behaviour::IgnoreFrames);
+    auto cfg = config();
+    cfg.connect_timeout = 5s;  // also bounds the close handshake, which the server never answers
+    run([&]() -> asio::awaitable<void> {
+        bool close_done = false;
+        {
+            auto client = make_client(cfg);
+            CO_ASSERT_TRUE((co_await client->connect()).has_value());
+            asio::co_spawn(ioc, client->close(), [&](const std::exception_ptr&) { close_done = true; });
+            co_await sleep_for(20ms);
+            EXPECT_FALSE(close_done);
+        }
+        EXPECT_TRUE(co_await wait_until([&] { return close_done; }, 1s));
     });
 }
 
