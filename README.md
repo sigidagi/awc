@@ -2,6 +2,9 @@
 
 [![CI](https://github.com/sigidagi/awc/actions/workflows/ci.yml/badge.svg)](https://github.com/sigidagi/awc/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/github/v/tag/sigidagi/awc?sort=semver&label=version)](https://github.com/sigidagi/awc/tags)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg?logo=cplusplus)](https://en.cppreference.com/w/cpp/20)
+[![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/sigidagi/awc/actions/workflows/ci.yml)
 
 A non-secure (`ws://`) WebSocket client written with C++20 coroutines on top of
 `boost::asio::io_context` and Boost.Beast.
