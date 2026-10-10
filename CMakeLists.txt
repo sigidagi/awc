@@ -92,6 +92,7 @@ endif()
 include(GNUInstallDirs)
 install(TARGETS async_websocket_client EXPORT async_websocket_clientTargets)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/async_websocket_client)
 install(EXPORT async_websocket_clientTargets
   NAMESPACE awc::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/async_websocket_client)

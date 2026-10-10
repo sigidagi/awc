@@ -1,6 +1,7 @@
 # async_websocket_client
 
 [![CI](https://github.com/sigidagi/awc/actions/workflows/ci.yml/badge.svg)](https://github.com/sigidagi/awc/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A non-secure (`ws://`) WebSocket client written with C++20 coroutines on top of
 `boost::asio::io_context` and Boost.Beast.
@@ -233,3 +234,7 @@ scripts/check.sh                  summarised build / test / tidy / coverage / fo
 CMakePresets.json                 dev, release, clang, coverage, tidy presets and workflows
 .github/workflows/ci.yml          GitHub Actions CI
 ```
+
+## License
+
+Released under the [MIT License](LICENSE).
