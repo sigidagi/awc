@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Install tools
         run: pacman -Syu --noconfirm --needed clang findutils
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check formatting
         run: scripts/check.sh format
 
@@ -38,14 +38,14 @@ jobs:
     steps:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed $PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build and test (Debug)
         run: scripts/check.sh test
       - name: Release build with warnings as errors
         run: scripts/check.sh release
       - name: Upload logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gcc-logs
           path: build/logs/
@@ -57,7 +57,7 @@ jobs:
     steps:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed $PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Configure, build and test
         run: cmake --workflow --preset clang
 
@@ -68,12 +68,12 @@ jobs:
     steps:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed $PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run clang-tidy
         run: scripts/check.sh tidy
       - name: Upload logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tidy-logs
           path: build/logs/
@@ -85,12 +85,12 @@ jobs:
     steps:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed $PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Measure coverage
         run: scripts/check.sh coverage
       - name: Upload HTML report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: |
