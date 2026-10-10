@@ -1,0 +1,38 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+Standard: c++20
+ColumnLimit: 110
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+AlignAfterOpenBracket: Align
+BinPackArguments: true
+BinPackParameters: true
+BreakBeforeBraces: Attach
+DerivePointerAlignment: false
+PointerAlignment: Left
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"async_websocket_client/'
+    Priority: 1
+  - Regex: '^<boost/'
+    Priority: 3
+  - Regex: '^<(spdlog|gtest|gmock|fmt)/'
+    Priority: 4
+  - Regex: '^<.*\.h>'
+    Priority: 5
+  - Regex: '^<'
+    Priority: 6
+  - Regex: '.*'
+    Priority: 2
+SortIncludes: CaseSensitive
+NamespaceIndentation: None
+FixNamespaceComments: true
+SpacesBeforeTrailingComments: 2
+...

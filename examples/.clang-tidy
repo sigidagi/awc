@@ -1,0 +1,8 @@
+---
+# Examples: a coroutine taking the client by reference is the intended usage pattern
+# (the client outlives io_context::run()), and main() is allowed to throw.
+InheritParentConfig: true
+Checks: >
+  -cppcoreguidelines-avoid-reference-coroutine-parameters,
+  -bugprone-exception-escape
+...

@@ -1,0 +1,10 @@
+---
+# Test code: relax guideline checks that fight the gtest fixture / coroutine-lambda style.
+InheritParentConfig: true
+Checks: >
+  -cppcoreguidelines-avoid-capturing-lambda-coroutines,
+  -cppcoreguidelines-avoid-reference-coroutine-parameters,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  -readability-convert-member-functions-to-static
+...
