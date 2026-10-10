@@ -238,6 +238,62 @@ CMakePresets.json                 dev, release, clang, coverage, tidy presets an
 .github/workflows/ci.yml          GitHub Actions CI
 ```
 
+## Known defects
+
+Found during an external review on 2026-10-10. Each one was reproduced with the
+scenarios named below from wsbench, a separate test harness; none is covered by this
+project's own tests.
+
+### Heartbeat misses a dead peer while a send is stuck
+
+The pong timeout only starts after `async_ping` has completed (`ping_loop` in
+`src/client.cpp`). If the peer stops reading while a large `send()` is in flight, the
+socket buffers fill up and Beast queues the ping behind the stuck write. The ping
+never completes, so the pong timeout never starts and the client stays `Connected`
+indefinitely. In the same situation, `close()` did not complete within 6 s.
+
+- Reproduced by `Heartbeat.DetectsDeadPeerDuringStuckSend`: the peer stops reading,
+  a 64 MiB send starts, and the first ping is due after 500 ms with a 100 ms pong timeout.
+  The client was still connected 3 s later.
+- Suggested fix: start the pong deadline when the ping is issued, not when its write
+  completes. For example, run `async_ping` in its own coroutine and let the ping loop
+  wait for the pong deadline independently.
+- Related, documented limitation: while the receive queue is full (`reader_blocked_`),
+  the pong timeout is skipped, so a dead peer also goes unnoticed while the application
+  is not calling `receive()`.
+
+### Use-after-free when the client is destroyed during `connect()` or `close()`
+
+`WebSocketClient::connect()` and `close()` return member coroutines of
+`detail::ClientImpl` that hold a raw `this`. Nothing keeps the `ClientImpl` alive for
+the awaiting coroutine. When the client is destroyed while either call is pending,
+`abort()` ends the connection loop, the loop's completion handler drops the last
+`shared_ptr`, and the pending call then resumes on freed memory. This contradicts
+"Destroying the client aborts all pending work" above.
+
+- AddressSanitizer reports `heap-use-after-free` at `src/client.cpp:132` (the wait
+  loop in `connect()`) and `src/client.cpp:208` (the wait loop in `close()`).
+- Reproduced by `Shutdown.DestroyWhileConnecting`, `Shutdown.DestroyWhileWaitingToReconnect`,
+  `Shutdown.DestroyWhileCloseIsPending`, `Basics.SendFailsPromptlyWhenNotConnected` and
+  `Reconnect.BackoffDelayGrows`. These all destroy the client while `connect()` or
+  `close()` is still pending. Without sanitizers they pass, because reading the freed
+  memory happens not to crash.
+- Suggested fix: have each facade method keep a `shared_ptr<ClientImpl>` in the
+  coroutine frame until the operation completes, e.g.
+  `[](auto impl) -> awaitable<Result<void>> { co_return co_await impl->connect(); }(impl_)`.
+
+### Packaging
+
+- **C++23 is not passed on to consumers.** The standard is set with
+  `set(CMAKE_CXX_STANDARD 23)`, which only applies to targets in this project. A project
+  that uses the library via `add_subdirectory` and does not set C++23 itself fails to
+  compile `error.hpp` (`std::expected` is C++23). Fix:
+  `target_compile_features(async_websocket_client PUBLIC cxx_std_23)`.
+- **`find_package` does not work after install.** `install(EXPORT ...)` installs the
+  targets file but no `async_websocket_clientConfig.cmake`, so
+  `find_package(async_websocket_client)` fails. Fix: generate a config file (and a version
+  file) with `CMakePackageConfigHelpers` and install it next to the targets file.
+
 ## License
 
 Released under the [MIT License](LICENSE).
